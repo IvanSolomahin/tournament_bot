@@ -19,6 +19,8 @@ async def handle_payment_photo(
     if member is None:
         return  # not a registered, confirmed team member — ignore stray photos
 
+    was_already_paid = member["payment_confirmed_at"] is not None
+
     file_id = message.photo[-1].file_id
     new_status = await status_engine.submit_payment(
         member["team_id"], member["id"], file_id, message.from_user.id
@@ -44,6 +46,10 @@ async def handle_payment_photo(
             f"Оплата от обоих участников получена. Оплата команды «{team['title']}» подтверждена.",
             exclude_telegram_id=message.from_user.id,
         )
+    elif was_already_paid:
+        # member is replacing their own already-recorded receipt — partner's
+        # situation hasn't changed, so don't re-notify them.
+        await message.answer("Скрин оплаты обновлён.")
     else:
         await message.answer(
             "Подтверждение оплаты получено. Ждём оплату от второго участника."

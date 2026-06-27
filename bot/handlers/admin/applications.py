@@ -58,7 +58,9 @@ def _teams_list_kb(teams, page: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def _card_kb(team_id: int, status: str, back_page: int) -> InlineKeyboardMarkup:
+def _card_kb(
+    team_id: int, status: str, back_page: int, has_receipts: bool
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if status == TeamStatus.REGISTERED.value:
         builder.row(
@@ -70,6 +72,13 @@ def _card_kb(team_id: int, status: str, back_page: int) -> InlineKeyboardMarkup:
                 text="В вейтлист",
                 callback_data=f"admin_set_status:{team_id}:{TeamStatus.WAITLIST.value}:{back_page}",
             ),
+        )
+    if has_receipts:
+        builder.row(
+            InlineKeyboardButton(
+                text="Показать чеки оплаты",
+                callback_data=f"admin_show_receipts:{team_id}:{back_page}",
+            )
         )
     builder.row(
         InlineKeyboardButton(
@@ -157,11 +166,35 @@ async def show_card(callback: CallbackQuery, repo: Repo, config: Config) -> None
     if team is None:
         await callback.answer("Команда не найдена.", show_alert=True)
         return
+    members = await repo.get_members(team_id)
+    has_receipts = any(m["payment_file_id"] for m in members)
     text = await _render_card(team_id, repo)
     await callback.message.edit_text(
-        text, reply_markup=_card_kb(team_id, team["status"], back_page)
+        text, reply_markup=_card_kb(team_id, team["status"], back_page, has_receipts)
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_show_receipts:"))
+async def show_receipts(callback: CallbackQuery, repo: Repo, config: Config) -> None:
+    if not config.is_admin(callback.from_user.id):
+        await callback.answer(NO_ACCESS, show_alert=True)
+        return
+    _, team_id_str, back_page_str = callback.data.split(":", 2)
+    team_id = int(team_id_str)
+    members = await repo.get_members(team_id)
+    sent = 0
+    for m in members:
+        if m["payment_file_id"]:
+            await callback.message.answer_photo(
+                m["payment_file_id"],
+                caption=f"Чек оплаты — участник {m['slot']}: {m['name']}",
+            )
+            sent += 1
+    if sent == 0:
+        await callback.answer("Чеков пока нет.", show_alert=True)
+    else:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_set_status:"))
@@ -180,15 +213,14 @@ async def set_status(
 
     team = await repo.get_team(team_id)
     if status == TeamStatus.MAIN_LIST:
-        members = await repo.get_members(team_id)
-        for m in members:
-            if m["telegram_id"]:
-                await callback.bot.send_message(
-                    m["telegram_id"],
-                    f"Команда «{team['title']}» включена в основной список турнира. "
-                    f"Подтвердите участие:",
-                    reply_markup=confirm_participation_kb(team_id),
-                )
+        await notifications.notify_team(
+            callback.bot,
+            repo,
+            team_id,
+            f"Команда «{team['title']}» включена в основной список турнира. "
+            f"Подтвердите участие:",
+            reply_markup=confirm_participation_kb(team_id),
+        )
     elif status == TeamStatus.WAITLIST:
         await notifications.notify_team(
             callback.bot,
@@ -198,8 +230,10 @@ async def set_status(
             f"Мы сообщим, если появится место в основном списке.",
         )
 
+    members = await repo.get_members(team_id)
+    has_receipts = any(m["payment_file_id"] for m in members)
     text = await _render_card(team_id, repo)
     await callback.message.edit_text(
-        text, reply_markup=_card_kb(team_id, status.value, back_page)
+        text, reply_markup=_card_kb(team_id, status.value, back_page, has_receipts)
     )
     await callback.answer("Статус обновлён.")
