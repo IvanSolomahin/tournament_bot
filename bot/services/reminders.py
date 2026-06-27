@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from datetime import datetime, time, timedelta
 
 from aiogram import Bot
@@ -13,8 +12,6 @@ from ..db.repo import Repo
 from ..keyboards import checkin_kb
 from ..models import TeamStatus
 from . import notifications
-
-logger = logging.getLogger(__name__)
 
 
 async def _daily_sweep(bot: Bot, repo: Repo) -> None:
@@ -36,14 +33,12 @@ async def _send_checkin_prompt(bot: Bot, repo: Repo, day: int) -> None:
     column = "checkin_day1_at" if day == 1 else "checkin_day2_at"
     for m in members:
         if m[column] is None:
-            try:
-                await bot.send_message(
-                    m["telegram_id"],
-                    f"Подтвердите присутствие в день {day} турнира:",
-                    reply_markup=checkin_kb(day),
-                )
-            except Exception:
-                logger.warning("Failed to send checkin prompt to %s", m["telegram_id"], exc_info=True)
+            await notifications.safe_send(
+                bot,
+                m["telegram_id"],
+                f"Подтвердите присутствие в день {day} турнира:",
+                reply_markup=checkin_kb(day),
+            )
 
 
 async def _remind_checkin(bot: Bot, repo: Repo, day: int) -> None:

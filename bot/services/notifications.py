@@ -1,20 +1,45 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
 
 from ..db.repo import Repo
 from ..models import TeamStatus
 
 logger = logging.getLogger(__name__)
 
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 1.0
 
-async def _safe_send(bot: Bot, telegram_id: int, text: str, **kwargs) -> None:
-    try:
-        await bot.send_message(telegram_id, text, **kwargs)
-    except Exception:
-        logger.warning("Failed to send message to %s", telegram_id, exc_info=True)
+
+async def safe_send(bot: Bot, telegram_id: int, text: str, **kwargs) -> None:
+    """Send a message, retrying on transient network errors / flood control.
+    Gives up silently on permanent failures (user blocked the bot, bad chat, etc.)."""
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            await bot.send_message(telegram_id, text, **kwargs)
+            return
+        except TelegramForbiddenError:
+            logger.warning("User %s blocked the bot or chat unavailable", telegram_id)
+            return
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after)
+        except TelegramNetworkError:
+            if attempt == RETRY_ATTEMPTS - 1:
+                logger.warning(
+                    "Failed to send message to %s after %d attempts",
+                    telegram_id,
+                    RETRY_ATTEMPTS,
+                    exc_info=True,
+                )
+                return
+            await asyncio.sleep(RETRY_BACKOFF_SECONDS * (2 ** attempt))
+        except Exception:
+            logger.warning("Failed to send message to %s", telegram_id, exc_info=True)
+            return
 
 
 async def notify_team(
@@ -31,7 +56,7 @@ async def notify_team(
     for m in members:
         if not m["telegram_id"] or m["telegram_id"] == exclude_telegram_id:
             continue
-        await _safe_send(bot, m["telegram_id"], text, reply_markup=reply_markup)
+        await safe_send(bot, m["telegram_id"], text, reply_markup=reply_markup)
         count += 1
     return count
 
@@ -50,7 +75,7 @@ async def send_text_to_all(bot: Bot, repo: Repo, text: str) -> int:
     """UC-13 / FR-5.9.2: admin sends a custom org message to all confirmed members."""
     members = await repo.list_members_by_status(ALL_ACTIVE_STATUSES)
     for m in members:
-        await _safe_send(bot, m["telegram_id"], text)
+        await safe_send(bot, m["telegram_id"], text)
     return len(members)
 
 
@@ -60,7 +85,7 @@ async def send_text_to_team(bot: Bot, repo: Repo, team_id: int, text: str) -> in
     count = 0
     for m in members:
         if m["telegram_id"]:
-            await _safe_send(bot, m["telegram_id"], text)
+            await safe_send(bot, m["telegram_id"], text)
             count += 1
     return count
 
@@ -71,7 +96,7 @@ async def send_text_to_status_group(
     """UC-16 / FR-5.12.2-5.12.3: admin sends arbitrary message to a status group."""
     members = await repo.list_members_by_status([status])
     for m in members:
-        await _safe_send(bot, m["telegram_id"], text)
+        await safe_send(bot, m["telegram_id"], text)
     return len(members)
 
 
@@ -79,7 +104,7 @@ async def remind_incomplete_registration(bot: Bot, repo: Repo) -> int:
     """FR-5.11.1: remind team creators whose teammate hasn't confirmed yet."""
     creators = await repo.list_pending_creators()
     for m in creators:
-        await _safe_send(
+        await safe_send(
             bot,
             m["telegram_id"],
             f"Напоминание: команда «{m['team_title']}» ещё не зарегистрирована — "
@@ -92,7 +117,7 @@ async def remind_unconfirmed_participation(bot: Bot, repo: Repo) -> int:
     """FR-5.11.2: remind members of main_list teams that haven't confirmed participation."""
     members = await repo.list_members_by_status([TeamStatus.MAIN_LIST.value])
     for m in members:
-        await _safe_send(
+        await safe_send(
             bot,
             m["telegram_id"],
             f"Напоминание: подтвердите участие команды «{m['team_title']}» в турнире.",
@@ -112,7 +137,7 @@ async def remind_missing_payment(bot: Bot, repo: Repo) -> int:
     count = 0
     for m in members:
         if m["payment_confirmed_at"] is None:
-            await _safe_send(
+            await safe_send(
                 bot,
                 m["telegram_id"],
                 f"Напоминание: отправьте подтверждение оплаты для команды «{m['team_title']}».",
@@ -134,7 +159,7 @@ async def remind_missing_checkin(bot: Bot, repo: Repo, day: int) -> int:
     count = 0
     for m in members:
         if m[column] is None:
-            await _safe_send(
+            await safe_send(
                 bot,
                 m["telegram_id"],
                 f"Напоминание: подтвердите присутствие в день {day} турнира (/checkin), "
