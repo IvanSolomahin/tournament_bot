@@ -1,13 +1,40 @@
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, Message
 
 from ..config import Config
 
 router = Router(name="common")
+
+PARTICIPANT_COMMANDS = [
+    BotCommand(command="create_team", description="Создать заявку команды"),
+    BotCommand(command="status", description="Статус вашей заявки"),
+    BotCommand(command="rename_team", description="Изменить название команды"),
+    BotCommand(command="checkin", description="Подтвердить присутствие в день турнира"),
+    BotCommand(command="cancel", description="Отменить текущее действие"),
+    BotCommand(command="help", description="Справка по командам"),
+]
+
+ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
+    BotCommand(command="admin_applications", description="Список заявок команд"),
+    BotCommand(command="admin_broadcast", description="Рассылка команде/группе"),
+    BotCommand(command="admin_org_message", description="Орг. сообщение всем участникам"),
+    BotCommand(command="admin_remind", description="Напомнить о невыполненном этапе"),
+    BotCommand(command="admin_export", description="Экспорт заявок в XLSX"),
+]
+
+
+async def set_bot_commands(bot: Bot, config: Config) -> None:
+    """Populate the Telegram client's command menu (the '/' button)."""
+    await bot.set_my_commands(PARTICIPANT_COMMANDS, scope=BotCommandScopeDefault())
+    for admin_id in config.admin_ids:
+        await bot.set_my_commands(
+            ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id)
+        )
+
 
 PARTICIPANT_HELP = (
     "Доступные команды:\n"

@@ -11,6 +11,7 @@ from .config import load_config
 from .db.database import Database
 from .db.repo import Repo
 from .handlers import get_root_router
+from .handlers.common import set_bot_commands
 from .services.reminders import build_scheduler
 from .services.status_engine import StatusEngine
 
@@ -34,6 +35,8 @@ async def run() -> None:
     dp["repo"] = repo
     dp["status_engine"] = status_engine
     dp.include_router(get_root_router())
+
+    await set_bot_commands(bot, config)
 
     scheduler = build_scheduler(bot, repo, config)
     scheduler.start()
